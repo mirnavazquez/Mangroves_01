@@ -8,7 +8,7 @@ We hypothesized that increasing levels of desiccation would lead to a decline in
 
 ## Analysis index
 
-Alpha diversity
-Beta diversity
-Differential abundance of taxa
-PICRUST2
+  -Alpha diversity
+  -Beta diversity
+  -Differential abundance of taxa
+  -PICRUST2
