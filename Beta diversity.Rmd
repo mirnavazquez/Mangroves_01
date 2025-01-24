@@ -1,0 +1,552 @@
+---
+title: "Beta diversity"
+author: "Mirna Vazquez Rosas Landa"
+date: "2025-01-24"
+output: html_document
+---
+## Beta Diversity Analysis
+
+We performed PERMANOVA and PCoA to analyze the beta diversity and the factors influencing microbial community structure.
+
+## Data Import and Preprocessing
+
+```{r setup, include=FALSE}
+# Load necessary libraries
+library(phyloseq)
+library(vegan)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(knitr)
+library(ggpubr)
+library(gridExtra)
+library(kableExtra)
+library(tibble)
+library(stringr)
+library(pairwiseAdonis)
+library(patchwork)
+library(RColorBrewer)
+library(writexl)
+
+# Load data
+load("../data/00_RData/ps.prevalence.green.RDATA")
+
+# Verify that the data was loaded correctly
+if (!exists("ps3")) {
+  stop("The object 'ps3' is not loaded correctly. Check the file.")
+}
+```
+
+# Data Preparation
+
+The data from the ps3 object (which refers to a phyloseq object) is extracted and converted into a plain data frame (sample_df) to make it easier to work with. The columns zone, season, and depth are converted to factors, ensuring these variables are treated as categorical.
+
+```{r}
+#Extract data directly as a data.frame from sample_data
+sample_df <- sample_data(ps3)
+sample_df <- data.frame(sample_df)  # convert to a plain data frame
+
+# Ensure 'zone', 'season', and 'depth' are factors
+sample_df$zone <- factor(sample_df$zone)
+sample_df$season <- factor(sample_df$season)
+sample_df$depth <- factor(sample_df$depth)
+
+# Verificar las primeras filas de sample_df
+head(sample_df)
+```
+
+# Bray-Curtis Distance Calculation
+
+The code calculates the Bray-Curtis dissimilarity matrix (bray_dist), which is a measure of the dissimilarity between microbial communities based on their species composition.
+
+```{r}
+# Calcular la matriz de disimilitud de Bray-Curtis
+bray_dist <- phyloseq::distance(ps3, method = "bray")
+
+# Verificar que bray_dist es de clase 'dist'
+if(!inherits(bray_dist, "dist")) {
+  bray_dist <- as.dist(bray_dist)  # Convertir a tipo 'dist' si no lo es
+}
+```
+
+# PERMANOVA (Permutational Multivariate Analysis of Variance)
+
+-A PERMANOVA interaction model is run using adonis2 to test the interaction effects of zone, season, and depth on the Bray-Curtis dissimilarity.
+
+-PERMANOVA is also run separately for the main effects (zone, season, depth) to test their individual contributions to the dissimilarity.
+
+-PERMANOVA is performed specifically testing the effects of season and depth (including their interaction).
+
+-Post-hoc pairwise PERMANOVA is also performed using pairwise.adonis to test differences between zones.
+
+-The code uses 9999 permutations to test the significance of these effects.
+
+```{r}
+# Run PERMANOVA interaction model
+permanova_interaction <- adonis2(bray_dist ~ factor(zone) * factor(season) * factor(depth), 
+                                 data = sample_df, 
+                                 permutations = 9999)
+
+# Post-hoc pairwise PERMANOVA
+pairwise_results <- pairwise.adonis(bray_dist, sample_df$zone, perm = 9999)
+print(pairwise_results)
+
+# PERMANOVA: Test the main effects (zone, season, depth) separately
+permanova_main_effects <- adonis2(bray_dist ~ zone + season + depth, 
+                                  data = sample_df, 
+                                  permutations = 9999)
+print(permanova_main_effects)
+
+# Perform PERMANOVA to test the effects of season and depth (with interactions)
+permanova_season_depth <- adonis2(bray_dist ~ season * depth, 
+                                  data = sample_df, 
+                                  permutations = 9999)
+print(permanova_season_depth)
+```
+
+# Betadisper (Homogeneity of Dispersion) Analysis
+
+-The code runs a Betadisper analysis to test the homogeneity of dispersion across different zones, checking whether the spread of data points is similar across groups.
+
+-A boxplot is generated to visualize the dispersion of microbial communities
+
+```{r}
+# Betadisper analysis for homogeneity of dispersion
+betadisper_result <- betadisper(bray_dist, sample_data(ps3)$zone)
+betadisper_test <- anova(betadisper_result)
+
+# Print Betadisper results
+print(betadisper_test)
+
+# Visualize dispersion differences with boxplots
+dispersion_df <- data.frame(
+  Zone = sample_data(ps3)$zone,
+  Distances = betadisper_result$distances
+)
+
+dispersion_plot <- ggplot(dispersion_df, aes(x = Zone, y = Distances)) +
+  geom_boxplot() +
+  theme_minimal() +
+  labs(title = "Dispersion of Microbial Communities by Zone",
+       y = "Bray-Curtis Distance",
+       x = "Zone")
+
+dispersion_plot
+```
+
+# Depth Group Recategorization
+
+-The depth variable is re-categorized into two groups: 20-40 cm and 5 cm to simplify the analysis and potentially highlight broader patterns in microbial community variation.
+
+-This new grouping is added to the sample_df data frame.
+
+```{r}
+# Recategorize depths (group 20 cm and 40 cm together)
+sample_df$depth_group <- ifelse(sample_df$depth %in% c("20", "40"), "20-40", "5")
+sample_df$depth_group <- factor(sample_df$depth_group)
+sample_data(ps3)$depth_group <- sample_df$depth_group
+
+# Verificar las primeras filas de sample_df
+head(sample_df)
+```
+
+# Testing Effects of Depth Groups
+
+-A PERMANOVA is run to test the effect of the newly created depth groups (depth_group) on the Bray-Curtis dissimilarity.
+
+-Betadisper is then run to check the dispersion of microbial communities across these new depth groups.
+
+-A boxplot is generated to visualize the dispersion of microbial communities by the new depth groups (20-40 cm and 5 cm).
+
+```{r}
+# Run PERMANOVA for depth groups
+permanova_depth_groups <- adonis2(bray_dist ~ depth_group, 
+                                  data = sample_df, 
+                                  permutations = 9999)
+print(permanova_depth_groups)
+
+
+# PERMANOVA for zone, season, and depth (including new depth groups)
+permanova_main_effects <- adonis2(bray_dist ~ zone + season + depth_group, 
+                                  data = sample_df, 
+                                  permutations = 9999)
+print(permanova_main_effects)
+
+# Visualize depth group dispersions
+betadisper_depth_groups <- betadisper(bray_dist, sample_data(ps3)$depth_group)
+betadisper_test_depth <- anova(betadisper_depth_groups)
+print(betadisper_test_depth)
+
+# Dispersion plot by depth groups
+dispersion_depth_plot <- ggplot(data.frame(
+  DepthGroup = sample_data(ps3)$depth_group,
+  Distances = betadisper_depth_groups$distances
+), aes(x = DepthGroup, y = Distances)) +
+  geom_boxplot() +
+  theme_minimal() +
+  labs(
+    title = "Dispersion of Microbial Communities by Depth Groups",
+    x = "Depth Group",
+    y = "Bray-Curtis Distance"
+  )
+ggsave("dispersion_depth_plot.png", dispersion_depth_plot)
+print(dispersion_depth_plot)
+```
+
+# Permanova
+
+The overall goal of this code is to evaluate the significance of different factors and their interactions on the community dissimilarities using PERMANOVA. The resulting tables show the key statistical metrics (F-statistic, R², p-value) for each model, which help determine which factors or combinations of factors have the strongest influence on the microbial community structure.
+
+```{r}
+# Run PERMANOVA tests for different main effects and interactions using adonis2()
+permanova_zone_main_effect <- adonis2(bray_dist ~ factor(zone), 
+                                      data = sample_df, 
+                                      permutations = 9999)
+
+permanova_season_main_effect <- adonis2(bray_dist ~ factor(season), 
+                                        data = sample_df, 
+                                        permutations = 9999)
+
+permanova_depth_main_effect <- adonis2(bray_dist ~ factor(depth), 
+                                       data = sample_df, 
+                                       permutations = 9999)
+
+permanova_depth_group_main_effect <- adonis2(bray_dist ~ depth_group, 
+                                             data = sample_df, 
+                                             permutations = 9999)
+
+permanova_zone_season_main_effect_combined <- adonis2(bray_dist ~ zone + season, 
+                                                      data = sample_df, 
+                                                      permutations = 9999)
+
+permanova_zone_depth_main_effect_combined <- adonis2(bray_dist ~ zone + depth, 
+                                                     data = sample_df, 
+                                                     permutations = 9999)
+
+permanova_season_depth_main_effect_combined <- adonis2(bray_dist ~ season + depth, 
+                                                       data = sample_df, 
+                                                       permutations = 9999)
+
+permanova_zone_season_depth_main_effect_combined <- adonis2(bray_dist ~ zone + season + depth, 
+                                                            data = sample_df, 
+                                                            permutations = 9999)
+
+permanova_zone_season_depth_group_main_effect_combined <- adonis2(bray_dist ~ zone + season + depth_group, 
+                                                                  data = sample_df, 
+                                                                  permutations = 9999)
+
+permanova_zone_season_interaction <- adonis2(bray_dist ~ factor(zone) * factor(season), 
+                                             data = sample_df, 
+                                             permutations = 9999)
+
+permanova_zone_depth_interaction <- adonis2(bray_dist ~ factor(zone) * factor(depth), 
+                                            data = sample_df, 
+                                            permutations = 9999)
+
+permanova_season_depth_interaction <- adonis2(bray_dist ~ factor(season) * factor(depth), 
+                                              data = sample_df, 
+                                              permutations = 9999)
+
+permanova_zone_depth_group_interaction <- adonis2(bray_dist ~ factor(zone) * depth_group, 
+                                                  data = sample_df, 
+                                                  permutations = 9999)
+
+permanova_season_depth_group_interaction <- adonis2(bray_dist ~ factor(season) * depth_group, 
+                                                    data = sample_df, 
+                                                    permutations = 9999)
+
+permanova_zone_season_depth_interaction<- adonis2(bray_dist ~ factor(zone) * factor(season) * factor(depth), 
+                                                  data = sample_df, 
+                                                  permutations = 9999)
+
+permanova_zone_season_depth_group_interaction <- adonis2(bray_dist ~ factor(zone) * factor(season) * depth_group, 
+                                                         data = sample_df, 
+                                                         permutations = 9999)
+
+
+permanova_season_depth_additive <- adonis2(bray_dist ~ season + depth, 
+                                           data = sample_df, 
+                                           permutations = 9999)
+
+# List of all permanova results with updated names
+permanova_results <- list(
+  permanova_zone_main_effect = permanova_zone_main_effect,
+  permanova_season_main_effect = permanova_season_main_effect,
+  permanova_depth_main_effect = permanova_depth_main_effect,
+  permanova_depth_group_main_effect = permanova_depth_group_main_effect,
+  
+  permanova_zone_season_main_effect_combined = permanova_zone_season_main_effect_combined,
+  permanova_zone_depth_main_effect_combined = permanova_zone_depth_main_effect_combined,
+  permanova_season_depth_main_effect_combined = permanova_season_depth_main_effect_combined,
+  permanova_zone_season_depth_main_effect_combined = permanova_zone_season_depth_main_effect_combined,
+  permanova_zone_season_depth_group_main_effect_combined = permanova_zone_season_depth_group_main_effect_combined,
+  
+  permanova_zone_season_interaction = permanova_zone_season_interaction,
+  permanova_zone_depth_interaction = permanova_zone_depth_interaction,
+  permanova_season_depth_interaction = permanova_season_depth_interaction,
+  permanova_zone_depth_group_interaction = permanova_zone_depth_group_interaction,
+  permanova_season_depth_group_interaction = permanova_season_depth_group_interaction,
+  permanova_zone_season_depth_interaction = permanova_zone_season_depth_interaction,
+  permanova_zone_season_depth_group_interaction = permanova_zone_season_depth_group_interaction,
+  
+  permanova_season_depth_additive = permanova_season_depth_additive
+  
+  #permanova_zone_season_interaction_only = permanova_zone_season_interaction_only,
+  #permanova_zone_depth_interaction_only = permanova_zone_depth_interaction_only,
+  #permanova_season_depth_interaction_only = permanova_season_depth_interaction_only
+)
+
+
+# Initialize an empty data frame to store the results
+r2_values <- data.frame(Interaction = character(), R2 = numeric(), stringsAsFactors = FALSE)
+
+# Loop through each permanova result and extract the R2 value
+for (name in names(permanova_results)) {
+  result <- permanova_results[[name]]
+  
+  # Check if the result has a 'R2' value directly
+  if ("R2" %in% names(result)) {
+    # Extract the R2 value directly (assuming it is available)
+    r2_value <- result$R2[1]  # The first R2 corresponds to the Model
+    
+  } else if ("aov.tab" %in% names(result)) {
+    # If no direct R2, extract the R2 from aov.tab
+    r2_value <- result$aov.tab$R2[1]  # First R2 corresponds to the Model
+    
+  } else {
+    r2_value <- NA  # If no R2 value is available
+  }
+  
+  # Add the result to the dataframe
+  r2_values <- rbind(r2_values, data.frame(Interaction = name, R2 = r2_value))
+}
+
+# Replace 'permanova_' with a more readable format and filter values above 0.2
+r2_values$Interaction <- gsub("permanova_", "", r2_values$Interaction)
+r2_values <- r2_values[r2_values$R2 > 0.2, ]
+
+# Sort the table by R2 values in descending order
+r2_values <- r2_values[order(-r2_values$R2), ]
+
+# Display the final table with cleaned-up names and sorted by R² values
+print(r2_values)
+
+# Initialize an empty data frame to store the results
+permanova_table <- data.frame(
+  Interaction = character(),
+  F_statistic = numeric(),
+  R2 = numeric(),
+  p_value = numeric(),
+  stringsAsFactors = FALSE
+)
+
+# Initialize an empty data frame to store the results
+permanova_table <- data.frame(
+  Interaction = character(),
+  F_statistic = numeric(),
+  R2 = numeric(),
+  p_value = numeric(),
+  stringsAsFactors = FALSE
+)
+
+# Loop through each PERMANOVA result and extract the relevant values
+for (name in names(permanova_results)) {
+  result <- permanova_results[[name]]
+  
+  # Check if the result is valid and has the necessary components
+  if ("aov.tab" %in% names(result)) {
+    # If 'aov.tab' is present, extract F, R2, and p-value
+    f_stat <- result$aov.tab$F[1]   # First F corresponds to the model
+    r2 <- result$aov.tab$R2[1]      # First R2 corresponds to the model
+    p_value <- result$aov.tab$`Pr(>F)`[1]  # First p-value corresponds to the model
+  } else {
+    # Extract values directly from the result if no 'aov.tab' is found
+    f_stat <- result$F[1]
+    r2 <- result$R2[1]
+    p_value <- result$`Pr(>F)`[1]
+  }
+  
+  # Append the result to the table
+  permanova_table <- rbind(
+    permanova_table,
+    data.frame(
+      Interaction = name,
+      F_statistic = f_stat,
+      R2 = r2,
+      p_value = p_value
+    )
+  )
+}
+
+# Print the final permanova table
+print(permanova_table)
+
+# Save the table as an Excel file
+write_xlsx(permanova_table, "permanova_results.xlsx")
+
+```
+
+## Principal Coordinates Analysis (PCoA)
+
+```{r}
+pcoa_results <- cmdscale(bray_dist, k = 2, eig = TRUE)
+```
+- **`cmdscale()`**: This function performs Classical Multi-Dimensional Scaling (PCoA), which is a dimensionality reduction technique used to visualize the distance matrix in a lower-dimensional space (2D or 3D). 
+  - **`bray_dist`** is the input distance matrix.
+  - **`k = 2`**: Specifies that we want a 2-dimensional representation (i.e., 2 principal coordinates).
+  - **`eig = TRUE`**: Tells the function to return eigenvalues (used to calculate the variance explained by each principal coordinate).
+
+## Preparing Data for Plotting
+```{r}
+pcoa_df <- as.data.frame(pcoa_results$points)
+colnames(pcoa_df) <- c("PCoA1", "PCoA2")
+```
+
+- **`pcoa_results$points`**: Extracts the principal coordinates (the coordinates for each sample in the 2D space).
+- **`as.data.frame()`**: Converts the points into a data frame for easier handling and plotting.
+- **`colnames(pcoa_df)`**: Renames the columns to `PCoA1` and `PCoA2` for the first and second principal coordinates.
+
+## Adding Metadata
+```{r}
+pcoa_df <- cbind(pcoa_df, as.data.frame(sample_data(ps3)))
+```
+
+- **`sample_data(ps3)`**: Extracts metadata (like sample variables such as depth, zone, season) from the `ps3` phyloseq object.
+- **`cbind()`**: Combines the PCoA results with the metadata into a single data frame.
+
+## Variance Explained by Principal Coordinates
+```{r}
+eigenvals <- pcoa_results$eig
+variance_explained <- 100 * eigenvals / sum(eigenvals)
+```
+
+- **`eigenvals`**: Extracts the eigenvalues, which represent the amount of variance explained by each principal coordinate.
+- **`variance_explained`**: Calculates the percentage of variance explained by each principal coordinate by dividing the eigenvalue by the total sum of eigenvalues and multiplying by 100.
+
+## Setting Factor Levels for Plotting
+
+```{r}
+pcoa_df$depth <- factor(pcoa_df$depth, levels = c("5", "20", "40"))
+pcoa_df$zone <- factor(pcoa_df$zone, levels = c("Fringe", "Basin", "Impaired"))
+```
+- These lines ensure that the metadata factors (`depth`, `zone`) are ordered in the desired way for plotting, with the given factor levels.
+
+## PCoA Plot Faceted by Season and Depth 
+
+```{r}
+pcoa_plot_faceted <- ggplot(pcoa_df, aes(x = PCoA1, y = PCoA2, color = zone)) +
+  geom_point(size = 3, alpha = 0.7) +
+  geom_mark_ellipse(
+    aes(group = zone, fill = zone),
+    alpha = 0.2,
+    show.legend = FALSE,
+    expand = unit(0.5, "mm")
+  ) +
+  theme_minimal() +
+  labs(
+    title = "PCoA of Microbial Community by Zone",
+    subtitle = "Faceted by Season and Depth",
+    x = paste0("PCoA1 (", round(variance_explained[1], 1), "%)"),
+    y = paste0("PCoA2 (", round(variance_explained[2], 1), "%)"),
+    color = "Zone"
+  ) +
+  facet_grid(season ~ depth) +
+  theme(
+    strip.text = element_text(size = 8, face = "bold"),
+    axis.title = element_text(size = 8, face = "bold"),
+    axis.text = element_text(size = 6),
+    legend.text = element_text(size = 7),
+    legend.title = element_text(size = 8, face = "bold"),
+    plot.title = element_text(size = 10, face = "bold"),
+    plot.subtitle = element_text(size = 8)
+  )
+```
+- **`ggplot()`**: Creates the PCoA plot with `PCoA1` on the x-axis and `PCoA2` on the y-axis.
+- **`geom_point()`**: Plots the samples as points, with `color = zone` representing the microbial zones.
+- **`geom_mark_ellipse()`**: Adds ellipses around the groups based on the zone, indicating the grouping of samples.
+- **`facet_grid(season ~ depth)`**: Facets the plot by season and depth, creating a grid of subplots for each combination.
+- **`theme_minimal()`**: Applies a clean, minimal theme to the plot.
+- **`labs()`**: Adds titles, labels, and customizes axes based on the variance explained.
+- **`theme()`**: Customizes various plot elements like text size and formatting.
+
+## PCoA Plot with Depth Groups
+```{r}
+pcoa_depth_group_plot <- ggplot(pcoa_df, aes(x = PCoA1, y = PCoA2, color = depth_group)) +
+  geom_point(size = 3, alpha = 0.7) +
+  theme_minimal() +
+  labs(
+    title = "PCoA of Microbial Community by Depth",
+    x = paste0("PCoA1 (", round(variance_explained[1], 1), "%)"),
+    y = paste0("PCoA2 (", round(variance_explained[2], 1), "%)"),
+    color = "Depth Group"
+  ) +
+  scale_color_manual(values = c("5" = "blue", "20-40" = "red")) +
+  theme(
+    axis.title = element_text(size = 10, face = "bold"),
+    axis.text = element_text(size = 8),
+    legend.text = element_text(size = 10),
+    legend.title = element_text(size = 10, face = "bold"),
+    plot.title = element_text(size = 12, face = "bold")
+  )
+```
+- This creates a PCoA plot colored by the depth group, and the color scale is manually set for `depth_group` to blue and red.
+
+## Bar Plot for R² Values
+```{r}
+# Bar plot for R² values
+colors <- brewer.pal(min(length(r2_values$Interaction), 12), "Set3")
+
+# Assign letters to factors in r2_values
+r2_values$Interaction <- factor(r2_values$Interaction, 
+                                levels = r2_values$Interaction[order(r2_values$R2, decreasing = TRUE)],
+                                labels = LETTERS[1:length(r2_values$Interaction)])
+
+barPlot_r <- ggplot(r2_values, aes(x = Interaction, y = R2, fill = Interaction)) +
+  geom_bar(stat = "identity", width = 0.7, alpha = 0.8) +
+  labs(
+    title = "Variance Explained by Factors (R²)",
+    x = "Factors",
+    y = "R² Value"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 6),
+    axis.title = element_text(size = 8),
+    axis.text = element_text(size = 6),
+    legend.position = "none"
+  ) +
+  scale_fill_manual(values = colors)
+```
+- **`geom_bar()`**: Creates a bar plot where each bar represents the variance explained by each factor (`Interaction`), using `R²` values.
+- **`scale_fill_manual()`**: Sets custom colors for each `Interaction` factor using a palette from `RColorBrewer`.
+
+## Combining the Three Plots into One Figure
+```{r}
+three_panel_figure <- (pcoa_plot_faceted + labs(tag = "A")) / 
+  ((pcoa_depth_group_plot + labs(tag = "B")) | 
+     (barPlot_r + labs(tag = "C"))) &
+  theme(
+    plot.tag = element_text(size = 14, face = "bold"),
+    plot.margin = margin(10, 10, 10, 10)
+  ) + 
+  plot_layout(
+    guides = "collect",
+    heights = c(3, 1),
+    widths = c(1, 1)
+  )
+```
+- This combines the three individual plots into one figure, with each plot labeled as "A", "B", and "C".
+- **`plot_layout()`**: Adjusts the layout by controlling the height and width of the panels and collecting legends for panels A and B.
+
+## Displaying and Saving the Figure
+```{r}
+# Save the figure as a PNG
+ggsave(
+  "three_panel_figure.png",
+  plot = three_panel_figure,
+  width = 8,    # Width in inches
+  height = 5,   # Height in inches
+  dpi = 300,    # Resolution
+  units = "in"  # Units for width and height
+)
+```

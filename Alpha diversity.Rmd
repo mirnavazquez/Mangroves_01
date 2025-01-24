@@ -267,3 +267,159 @@ write_xlsx(
 )
 ```
 
+# Combined figure
+
+- Reordering Factor Levels for 'zone': richness$zone <- factor(richness$zone, levels = c("Fringe", "Basin", "Impaired")). This reorders the factor levels of the zone variable to control the display order in subsequent plots.
+
+-Creating Boxplots: For each diversity index (Observed, Shannon, Simpson, Chao1), the code creates a boxplot with ggplot2.
+The boxplots show microbial diversity across zones (zone), with colors representing seasons (season). The plots also facet by depth (depth).
+The geom_boxplot() function is used to create the boxplots, and facet_wrap(~depth) creates separate panels for each depth.
+scale_fill_manual(values = c("darkorange","#D6ED17FF")) sets the color palette for the seasons.
+
+-Wilcoxon Test Results: wilcox_results_summary contains results from pairwise Wilcoxon tests. p_value is cleaned and converted to numeric, and a new column (significance) is created, labeling results as "Significant" or "Not Significant" based on a threshold (0.05).
+
+-Heatmap of Wilcoxon Test Results (p-values): A heatmap (p_value_heatmap) is generated using ggplot2 to visualize the significance of pairwise comparisons. The heatmap uses geom_tile() to fill cells with colors based on significance ("Significant" = green, "Not Significant" = gray).
+The p-values are added as text labels with geom_text().
+The heatmap is customized with axis labels, rotated text, and a legend indicating significance.
+
+-Data Transformation (Pivoting and Reshaping): The combined_table is transformed from wide to long format using pivot_longer(), so each p-value column is converted into a row with its corresponding metric.
+The significance column is redefined in the reshaped data based on the threshold, and Metric and Factor_Comparison are reordered for display in the heatmap.
+
+-Second Heatmap (p_value_heatmap_2): A second heatmap (p_value_heatmap_2) is created using the reshaped data. It follows similar steps as the first heatmap but with slightly different settings, like adjusting text size for better readability.
+
+-Combining All Plots: ggarrange() is used to combine the boxplots and heatmaps into a single figure. The ncol = 2, nrow = 3 argument arranges the plots in a 2x3 grid. Each plot is labeled with a letter (A-F) for easy reference. The common legend is placed at the bottom of the figure.
+
+```{r alpha_diversity_visual}
+# Reorder 'zone' factor levels to control the display order
+richness$zone <- factor(richness$zone, levels = c("Fringe", "Basin", "Impaired"))
+
+# 1. Boxplot for Shannon Index (Diversity), with Season and Zone
+observed_plot <- ggplot(richness, aes(x = zone, y = Observed, fill = season)) +
+  geom_boxplot() +
+  facet_wrap(~depth) +
+  theme_minimal() +
+  labs(title = "Observed (Richness)", y = "Observed") +
+  scale_fill_manual(values = c("darkorange","#D6ED17FF")) +
+  theme(axis.title.x = element_blank(),
+        axis.text.x = element_text(angle = 45, hjust = 1))  # Rotate x-axis for better readability
+
+# 1. Boxplot for Shannon Index (Diversity), with Season and Zone
+shannon_plot <- ggplot(richness, aes(x = zone, y = Shannon, fill = season)) +
+  geom_boxplot() +
+  facet_wrap(~depth) +
+  theme_minimal() +
+  labs(title = "Shannon Index (Diversity)", y = "Shannon Index") +
+  scale_fill_manual(values = c("darkorange","#D6ED17FF")) +
+  theme(axis.title.x = element_blank(),
+        axis.text.x = element_text(angle = 45, hjust = 1))  # Rotate x-axis for better readability
+
+# 2. Simpson Index plot (Evenness) with Season and Zone
+simpson_plot <- ggplot(richness, aes(x = zone, y = Simpson, fill = season)) +
+  geom_boxplot() +
+  facet_wrap(~depth) +
+  theme_minimal() +
+  labs(title = "Simpson Index (Evenness)", y = "Simpson Index") +
+  scale_fill_manual(values = c("darkorange","#D6ED17FF")) +
+  theme(axis.title.x = element_blank(),
+        axis.text.x = element_text(angle = 45, hjust = 1))
+
+# 3. Chao1 Index plot (Richness) with Season and Zone
+chao1_plot <- ggplot(richness, aes(x = zone, y = Chao1, fill = season)) +
+  geom_boxplot() +
+  facet_wrap(~depth) +
+  theme_minimal() +
+  labs(title = "Chao1 Index (Richness)", y = "Chao1 Index") +
+  scale_fill_manual(values = c("darkorange","#D6ED17FF")) +
+  theme(axis.title.x = element_blank(),
+        axis.text.x = element_text(angle = 45, hjust = 1))
+
+# Define the significance threshold
+threshold <- 0.05
+
+# Convert p-value column to numeric and add Factor_Comparison
+wilcox_results_summary <- wilcox_results_summary %>%
+  mutate(p_value = as.numeric(gsub("[^0-9\\.]", "", p_value)),  # Clean and convert
+         Factor_Comparison = paste(Factor, Comparison, sep = ":"),
+         significance = ifelse(p_value < threshold, "Significant", "Not Significant"))
+
+# Define order of metrics
+ordered_metrics <- c("Observed", "Chao1", "Shannon", "Simpson")
+
+# Reorder Metric factor levels
+wilcox_results_summary$Metric <- factor(wilcox_results_summary$Metric, levels = ordered_metrics)
+
+# Create the heatmap with binary color scale
+p_value_heatmap <- ggplot(wilcox_results_summary, 
+                          aes(x = Metric, y = Factor_Comparison)) +
+  geom_tile(aes(fill = significance), color = "black") +  # Fill based on significance
+  scale_fill_manual(values = c("Significant" = "green", "Not Significant" = "gray"), 
+                    name = "Significance") +  # Manual binary color scale
+  geom_text(aes(label = ifelse(!is.na(p_value), sprintf("%6.3f", p_value), "")), 
+            size = 3, color = "black", hjust = 0.5, vjust = 0.5) +  # Add p-values as text
+  theme_minimal() +
+  labs(title = "Pairwise Wilcoxon Test Results (p-values)", 
+       x = "Diversity Metric", y = "Comparison") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1),  # Rotate x-axis
+        axis.text.y = element_text(size = 8),  # Adjust y-axis text size
+        legend.position = "bottom") +  # Place legend at bottom
+  guides(fill = guide_legend(override.aes = list(color = NA)))  # Clean up legend
+
+# Print the heatmap
+p_value_heatmap
+
+# Convert to long format using pivot_longer from tidyr
+long_format <- pivot_longer(combined_table, 
+                            cols = starts_with("p_value_"), 
+                            names_to = "Metric", 
+                            values_to = "pvalue")
+
+
+# Add a new column to classify significance
+long_format_summary <- long_format %>%
+  mutate(p_value = as.numeric(gsub("[^0-9\\.]", "", pvalue)),  # Clean and convert
+         Factor_Comparison = paste(depth, Comparison, sep = ":"),
+         significance = 
+           ifelse(p_value < threshold, "Significant", 
+                  "Not Significant")) %>%
+  mutate(Metric=str_remove_all(Metric, "p_value_"))
+
+ordered_comparison<- c("40 cm:Fringe vs Basin", "40 cm:Impaired vs Basin", "40 cm:Impaired vs Fringe",
+                       "20 cm:Fringe vs Basin", "20 cm:Impaired vs Basin", "20 cm:Impaired vs Fringe",
+                       "5 cm:Fringe vs Basin", "5 cm:Impaired vs Basin", "5 cm:Impaired vs Fringe")
+# Reorder Metric factor levels
+long_format_summary$Metric <- factor(long_format_summary$Metric, levels = ordered_metrics)
+long_format_summary$Factor_Comparison <- factor(long_format_summary$Factor_Comparison, levels = ordered_comparison)
+
+
+# Create the heatmap with binary color scale
+p_value_heatmap_2 <- ggplot(long_format_summary, 
+                          aes(x = Metric, y = Factor_Comparison)) +
+  geom_tile(aes(fill = significance), color = "black") +  # Fill based on significance
+  scale_fill_manual(values = c("Significant" = "green", "Not Significant" = "gray"), 
+                    name = "Significance") +  # Manual binary color scale
+  geom_text(aes(label = ifelse(!is.na(p_value), sprintf("%6.3f", p_value), "")), 
+            size = 2, color = "black", hjust = 0.5, vjust = 0.5) +  # Add p-values as text
+  theme_minimal() +
+  labs(title = "Pairwise Wilcoxon Test Results (p-values)", 
+       x = "Diversity Metric", y = "Comparison") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1),  # Rotate x-axis
+        axis.text.y = element_text(size = 6),  # Adjust y-axis text size
+        legend.position = "bottom") +  # Place legend at bottom
+  guides(fill = guide_legend(override.aes = list(color = NA)))  # Clean up legend
+
+# Print the heatmap
+p_value_heatmap_2
+
+# Combine all plots into one figure
+combined_figure <- ggarrange(
+  observed_plot, chao1_plot, shannon_plot, simpson_plot,  p_value_heatmap, p_value_heatmap_2,
+  ncol = 2, nrow = 3,
+  labels = c("A", "B", "C", "D", "E", "F"),
+  common.legend = TRUE,
+  legend = "bottom"
+)
+
+# Print the combined figure
+print(combined_figure)
+
+```
