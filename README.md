@@ -8,7 +8,7 @@ We hypothesized that increasing levels of desiccation would lead to a decline in
 
 ## Analysis index
 
-  -[Alpha diversity](https://github.com/mirnavazquez/Mangroves_01/blob/main/Alpha%20diversity.Rmd)
-  -Beta diversity
-  -Differential abundance of taxa
-  -PICRUST2
+  - [Alpha diversity](https://github.com/mirnavazquez/Mangroves_01/blob/main/Alpha%20diversity.Rmd)
+  - Beta diversity
+  - Differential abundance of taxa
+  - PICRUST2
