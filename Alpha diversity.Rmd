@@ -1,0 +1,269 @@
+---
+title: "Alpha diversity"
+author: "Mirna Vazquez Rosas Landa"
+date: "2025-01-24"
+output: html_document
+---
+## Data Import and Preprocessing
+
+```{r setup, include=FALSE}
+# Load necessary libraries
+library(phyloseq)
+library(vegan)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(knitr)
+library(ggpubr)
+library(gridExtra)
+library(kableExtra)
+library(tibble)
+library(stringr)
+library(pairwiseAdonis)
+library(patchwork)
+library(RColorBrewer)
+library(writexl)
+
+# Load data
+load("../data/00_RData/ps.prevalence.green.RDATA")
+
+# Verify that the data was loaded correctly
+if (!exists("ps3")) {
+  stop("The object 'ps3' is not loaded correctly. Check the file.")
+}
+```
+
+# Alpha Diversity Analysis
+
+We calculated multiple alpha diversity indices (Shannon, Simpson, and Chao1) and assessed their significance across factors such as season, zone, and depth.
+
+This R script calculates and processes microbial community richness metrics from a phyloseq object (ps3) and prepares the data for further analysis:
+
+## Richness Estimation:
+
+The code calculates richness metrics (Observed, Chao1, Shannon, and Simpson) using the estimate_richness() function applied to the phyloseq object ps3.
+
+## Error Handling:
+
+If no richness metrics are generated (e.g., the result is an empty data frame), the code stops execution with an error message instructing the user to verify the ps3 object.
+
+## Factor Conversion:
+
+The variables depth, season, and zone from the metadata of the ps3 object are extracted and processed:
+
+-depth is converted into a factor with specific levels (5, 20, 40).
+-season is converted into a factor with levels (dry, flood).
+-zone is extracted without modification.
+
+## Data Cleaning:
+
+Rows containing missing values (NA) in critical columns (zone, depth, season, and richness metrics) are removed using the filter() function from the dplyr package.
+
+The resulting richness data frame is a clean, structured dataset that includes richness metrics and corresponding metadata (depth, season, and zone) for further analysis.
+
+```{r richness}
+# Estimate richness metrics (Observed, Chao1, Shannon, Simpson)
+richness <- estimate_richness(ps3)
+
+# Check if richness estimation was successful
+if (ncol(richness) == 0) {
+  stop("Richness metrics could not be estimated. Verify the 'ps3' object.")
+}
+
+# Convert 'depth', 'season', and 'zone' variables to factors
+richness$depth <- factor(
+  sample_data(ps3)$depth, levels = c("5", "20", "40")
+)
+richness$season <- factor(
+  sample_data(ps3)$season, levels = c("dry", "flood")
+)
+richness$zone <- sample_data(ps3)$zone
+
+# Remove rows with NA values in relevant columns
+richness <- richness %>%
+  filter(
+    !is.na(zone), !is.na(depth), !is.na(season),
+    !is.na(Observed), !is.na(Chao1), !is.na(Shannon), !is.na(Simpson)
+  )
+```
+
+## Helper Functions
+
+-perform_shapiro_tests
+
+ -Purpose: Conduct Shapiro-Wilk tests for normality across multiple metrics and grouping variables.
+ -Output: A data frame summarizing the p-values from Shapiro-Wilk tests.
+ -Key Features: Dynamically pivots the dataset to a long format for testing. Tests are grouped by metric and specified grouping variables. Handles small sample sizes (n() < 3) by assigning NA.
+
+-perform_kruskal_tests
+
+ -Purpose: Perform Kruskal-Wallis tests to compare metrics across grouping factors (non-parametric).
+ -Output: A summary of p-values for each metric and grouping factor.
+ -Key Features:Constructs dynamic formulas like Value ~ zone for statistical testing.
+Automatically generates columns for results using across() and .names.
+
+-pairwise_comparisons
+
+ -Purpose: Conduct pairwise Wilcoxon tests for a specific metric and grouping factor.
+ -Output: A matrix of p-values adjusted using the Bonferroni method.
+
+-extract_pvals
+
+ -Purpose: Convert the p-values matrix from pairwise_comparisons into a clean and readable long format.
+ -Output: A data frame summarizing pairwise comparisons, metrics, and adjusted p-values.
+ -Key Features: Annotates significant p-values (p < 0.05) with an asterisk (*). Combines comparison pairs into a single column for clarity.
+
+```{r setup, include=FALSE}
+# Define helper functions
+perform_shapiro_tests <- function(data, metrics, grouping_vars) {
+  data %>%
+    pivot_longer(cols = metrics, names_to = "Metric", values_to = "Value") %>%
+    group_by(across(all_of(grouping_vars)), Metric) %>%
+    summarise(Shapiro_p = ifelse(n() >= 3, shapiro.test(Value)$p.value, NA), .groups = "drop")
+}
+
+perform_kruskal_tests <- function(data, metrics, grouping_factors) {
+  data %>%
+    pivot_longer(cols = metrics, names_to = "Metric", values_to = "Value") %>%
+    group_by(Metric) %>%
+    summarise(
+      across(
+        all_of(grouping_factors),
+        ~ {
+          # Dynamically create a formula for kruskal.test
+          grouping_var <- cur_column()
+          formula <- as.formula(paste("Value ~", grouping_var))
+          kruskal.test(formula, data = data)$p.value
+        },
+        .names = "Kruskal_p_{.col}"
+      ),
+      .groups = "drop"
+    )
+}
+
+pairwise_comparisons <- function(data, metric, factor) {
+  pairwise.wilcox.test(
+    data[[metric]], data[[factor]], p.adj = "bonf", exact = FALSE
+  )$p.value
+}
+
+extract_pvals <- function(pvals_list, metric, factor_name) {
+  pvals <- as.data.frame(pvals_list)
+  pvals <- pvals %>%
+    rownames_to_column(var = "Comparison1") %>%
+    pivot_longer(-Comparison1, names_to = "Comparison2", values_to = "p_value") %>%
+    filter(!is.na(p_value)) %>%
+    mutate(
+      Factor = factor_name,
+      Metric = metric,
+      Comparison = paste(Comparison1, "vs.", Comparison2),
+      p_value = ifelse(p_value < 0.05, paste0(formatC(p_value, digits = 3, format = "f"), "*"),
+                       formatC(p_value, digits = 3, format = "f"))
+    ) %>%
+    select(Factor, Comparison, Metric, p_value)
+  return(pvals)
+}
+```
+
+## Data Cleaning and Preparation
+
+Purpose: Remove rows with missing values in grouping variables or metrics to ensure clean data for analysis.
+Output: A cleaned version of the dataset, richness_clean.
+
+```{r data-cleaning}
+# Define constants
+metrics <- c("Observed", "Chao1", "Shannon", "Simpson")
+grouping_vars <- c("zone", "depth", "season")
+
+# Drop rows with NA values
+richness_clean <- richness %>%
+  drop_na(zone, depth, season, all_of(metrics))
+```
+
+## Shapiro-Wilk Normality Tests
+
+  -Purpose: Test the normality of each metric grouped by the specified factors (zone, depth, season).
+  -Output: A table showing Shapiro-Wilk test results.
+  -Table Display: Rendered using kable() and kableExtra for a professional look.
+
+```{r shapiro-tests}
+# Perform Shapiro-Wilk normality tests
+shapiro_results <- perform_shapiro_tests(richness_clean, metrics, grouping_vars)
+
+# Display results
+kable(shapiro_results, caption = "Shapiro-Wilk Normality Test Results", align = "c") %>%
+  kable_styling(full_width = FALSE, position = "center")
+```
+
+## Kruskal-Wallis Tests
+
+  -Purpose: Compare metrics across grouping factors using the Kruskal-Wallis test.
+  -Output: A table summarizing the p-values for each metric and factor.
+  -Table Display: Styled using kable() for clarity.
+
+```{r kruskal-tests}
+# Perform Kruskal-Wallis tests
+kruskal_results <- perform_kruskal_tests(richness_clean, metrics, grouping_vars)
+
+# Display results
+kable(kruskal_results, caption = "Kruskal-Wallis Test Results", align = "c") %>%
+  kable_styling(full_width = FALSE, position = "center")
+```
+
+## Pairwise Wilcoxon Tests
+
+  -Purpose: Perform pairwise Wilcoxon tests to identify significant differences between groups for each metric.
+  -Adjust p-values for multiple comparisons using the Bonferroni method.
+  -Results Summary: The extract_pvals function formats the results into a human-readable summary. Pivoted to a wide format for a concise display.
+  -Table Display:Styled using kable() and kableExtra to highlight significant results and include a footnote.
+
+```{r pairwise-tests}
+# Perform pairwise Wilcoxon tests
+pairwise_pvals <- lapply(metrics, function(metric) {
+  list(
+    Zone = pairwise_comparisons(richness_clean, metric, "zone"),
+    Depth = pairwise_comparisons(richness_clean, metric, "depth"),
+    Season = pairwise_comparisons(richness_clean, metric, "season")
+  )
+})
+names(pairwise_pvals) <- metrics
+
+# Extract and format p-values
+wilcox_results_summary <- bind_rows(
+  lapply(metrics, function(metric) {
+    bind_rows(
+      extract_pvals(pairwise_pvals[[metric]]$Zone, metric, "Zone"),
+      extract_pvals(pairwise_pvals[[metric]]$Depth, metric, "Depth"),
+      extract_pvals(pairwise_pvals[[metric]]$Season, metric, "Season")
+    )
+  })
+)
+
+# Pivot table to wide format
+wilcox_results_summary_wide <- wilcox_results_summary %>%
+  pivot_wider(names_from = Metric, values_from = p_value) %>%
+  arrange(Factor)
+
+# Display the pairwise comparison results
+kbl(wilcox_results_summary_wide,
+    caption = "Pairwise Comparison p-values with Bonferroni Correction",
+    align = "c", format = "html", escape = FALSE) %>%
+  kable_styling(full_width = FALSE, position = "center") %>%
+  column_spec(1, bold = TRUE) %>%
+  add_footnote(label = "* Significant p-value (p < 0.05)", notation = "symbol")
+```
+
+## Supplementary tables
+```{r}
+# Create the Excel file with all tables
+write_xlsx(
+  list(
+    "Richness Clean Data" = richness_clean,
+    "Shapiro-Wilk Test Results" = shapiro_results,
+    "Kruskal-Wallis Test Results" = kruskal_results,
+    "Pairwise Comparison p-values" = wilcox_results_summary_wide
+  ),
+  path = "Analysis_Results.xlsx"
+)
+```
+
