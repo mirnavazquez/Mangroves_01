@@ -1,0 +1,418 @@
+---
+title: "Differential abundance of taxa"
+author: "Mirna Vazquez Rosas Landa"
+date: "2025-01-24"
+output: html_document
+---
+
+### Libraries and Data Loading
+```{r Libraries and Data Loading}
+# Load required libraries
+library(phyloseq)
+library(DESeq2)
+library(pheatmap)
+library(ggplot2)
+library(tidyverse)
+library(patchwork)
+
+# Load the phyloseq object
+load("ps.prevalence.green.RDATA")
+```
+
+### Step 1: Extract Count Data from the Phyloseq Object
+```{r Extract Count Data from the Phyloseq Object}
+# Extract count data from the phyloseq object
+count_data <- as(otu_table(ps3), "matrix")
+
+# Ensure taxa are rows (if needed)
+if (!taxa_are_rows(ps3)) {
+  count_data <- t(count_data)
+}
+
+# Add a pseudo-count to avoid zeros
+count_data_transformed <- count_data + 1
+```
+
+### Step 2: Recreate the Phyloseq Object with Transformed Count Data
+```{r Recreate the Phyloseq Object with Transformed Count Data}
+# Recreate the phyloseq object with transformed count data
+ps3_transformed <- merge_phyloseq(
+  otu_table(count_data_transformed, taxa_are_rows = TRUE),
+  sample_data(ps3),
+  tax_table(ps3),
+  phy_tree(ps3),
+  refseq(ps3)
+)
+
+# Ensure that 'zone', 'season', and 'depth' are factors
+sample_data(ps3_transformed)$zone <- as.factor(sample_data(ps3_transformed)$zone)
+sample_data(ps3_transformed)$season <- as.factor(sample_data(ps3_transformed)$season)
+sample_data(ps3_transformed)$depth <- as.factor(sample_data(ps3_transformed)$depth)
+```
+
+### Step 3: Convert the Phyloseq Object to a DESeq2 Object
+```{r Convert the Phyloseq Object to a DESeq2 Object} 
+# Convert the phyloseq object to DESeq2 object
+dds_transformed <- phyloseq_to_deseq2(ps3_transformed, design = ~ zone + season + depth)
+
+# Perform differential abundance analysis
+dds_transformed <- DESeq(dds_transformed)
+```
+
+### Step 4: Apply Variance-Stabilizing Transformation (VST)
+```{r Apply Variance-Stabilizing Transformation (VST)}
+# Apply variance-stabilizing transformation
+vsd <- varianceStabilizingTransformation(dds_transformed, blind = FALSE)
+
+# Extract the transformed data matrix
+vsd_matrix <- assay(vsd)
+```
+
+### Step 5: Filter Taxa with Low Variance (Optional)
+```{r Filter Taxa with Low Variance (Optional)}
+# Optionally filter taxa with low variance (e.g., keep top 50 taxa by variance)
+top_var_taxa <- head(order(rowVars(vsd_matrix), decreasing = TRUE), 50)
+vsd_matrix_filtered <- vsd_matrix[top_var_taxa, ]
+```
+
+### Step 6: Prepare Taxonomy Labels and Annotation Data
+```{r Prepare Taxonomy Labels and Annotation Data}
+# Extract taxonomy information from your phyloseq object
+taxonomy_info <- tax_table(ps3_transformed)
+
+# Step 9: Create taxonomy labels for filtered taxa
+taxonomy_info_filtered <- taxonomy_info[top_var_taxa, ]
+taxonomy_labels_filtered <- apply(taxonomy_info_filtered, 1, function(x) {
+  phylum <- ifelse(is.na(x["Phylum"]), "Unknown", x["Phylum"])
+  class <- ifelse(is.na(x["Class"]), "Unknown", x["Class"])
+  family <- ifelse(is.na(x["Family"]), "Unknown", x["Family"])
+  paste(phylum, class, family, sep = " | ")
+})
+
+# Step 10: Assign taxonomy labels to the rownames of the filtered matrix
+rownames(vsd_matrix_filtered) <- taxonomy_labels_filtered
+
+# Step 11: Create annotation_data from sample_data
+annotation_data <- data.frame(
+  Zone = factor(sample_data(ps3_transformed)$zone),
+  Season = factor(sample_data(ps3_transformed)$season),  # Assuming 'season' exists in sample_data
+  Depth = factor(sample_data(ps3_transformed)$depth)    # Assuming 'depth' exists in sample_data
+)
+
+# Ensure correct order of annotation data
+rownames(annotation_data) <- colnames(vsd_matrix_filtered)
+annotation_data <- annotation_data[match(colnames(vsd_matrix_filtered), rownames(annotation_data)), ]
+
+# Check if sample names align
+if (!all(rownames(annotation_data) == colnames(vsd_matrix_filtered))) {
+  stop("Sample names do not align between vsd_matrix_filtered and annotation_data.")
+}
+
+
+# Check if the sample names are aligned
+all(rownames(annotation_data) == colnames(vsd_matrix_filtered))  # Should return TRUE
+```
+
+```{r}
+# Define custom color mappings for annotations with improved green and blue
+annotation_colors <- list(
+  Zone = c(
+    Fringe = "#3288BD",  # Medium ocean blue
+    Basin = "#66C2A5",   # Soft teal-green
+    Impaired = "red"
+  ),
+  Season = c(
+    dry = "darkorange",
+    flood = "#D6ED17FF"
+  ),
+  Depth = c(
+    `5` = "#D9B68AFF",  # Lightest brown for 5
+    `20` = "#8E562EFF", # Medium brown for 20
+    `40` = "#5A3222FF"  # Darkest brown for 40
+  )
+)
+
+```
+
+## Step 7: Create Heatmap
+```{r Create Heatmap}
+# Step 1: Create the heatmap with clustering but no row dendrogram
+heatmap_no_dendrogram <- pheatmap(
+  vsd_matrix_filtered,
+  cluster_rows = TRUE,  # Enable clustering of rows (taxa)
+  cluster_cols = TRUE,  # Enable clustering of columns (samples)
+  show_rownames = TRUE,  # Show taxonomy labels (Class and Family)
+  show_colnames = FALSE, # Hide sample names
+  fontsize_row = 6,  # Adjust font size for row labels
+  fontsize_col = 10, # Font size for column labels
+  color = colorRampPalette(c("navy", "white", "firebrick"))(50),  # Color palette for data
+  labels_row = rownames(vsd_matrix_filtered),  # Use taxonomy labels for row names
+  annotation_col = annotation_data,  # Add annotations for Zone, Season, and Depth
+  annotation_colors = annotation_colors,  # Apply custom color mappings
+  #main = "",  # Title
+  treeheight_row = 0,
+  treeheight_col = 0# Remove the dendrogram for rows (y-axis)
+)
+
+```
+
+```{r}
+ggsave("heatmap_plot.png", plot = heatmap_no_dendrogram, 
+       width = 8, height = 5,  # Adjusted width and height to optimize space
+       dpi = 300,              # High resolution for print
+       units = "in",           # Units in inches
+       device = "png",         # Ensure PNG format
+       bg = "white"            # Background color (ensures no transparency)
+)
+
+```
+
+### Step 8: Define Contrasts for Differential Expression
+```{r Define Contrasts for Differential Expression}
+# Define contrasts for each comparison
+contrast_1 <- c("zone", "Impaired", "Basin")
+contrast_2 <- c("zone", "Impaired", "Fringe")
+contrast_3 <- c("zone", "Basin", "Fringe")
+contrast_4 <- c("depth", "5", "20")
+contrast_5 <- c("depth", "5", "40")
+contrast_6 <- c("season", "flood", "dry")
+
+# Run differential expression analysis for each contrast
+res_1 <- results(dds_transformed, contrast = contrast_1)
+res_2 <- results(dds_transformed, contrast = contrast_2)
+res_3 <- results(dds_transformed, contrast = contrast_3)
+res_4 <- results(dds_transformed, contrast = contrast_4)
+res_5 <- results(dds_transformed, contrast = contrast_5)
+res_6 <- results(dds_transformed, contrast = contrast_6)
+```
+
+### Step 9: Filter Results Based on Significance
+```{r Filter Results Based on Significance}
+# Optionally filter results based on p-value or log2 fold change thresholds
+res_1_filtered <- res_1[!is.na(res_1$padj) & res_1$padj < 0.05 & abs(res_1$log2FoldChange) > 1, ]
+res_2_filtered <- res_2[!is.na(res_2$padj) & res_2$padj < 0.05 & abs(res_2$log2FoldChange) > 1, ]
+res_3_filtered <- res_3[!is.na(res_3$padj) & res_3$padj < 0.05 & abs(res_3$log2FoldChange) > 1, ]
+res_4_filtered <- res_4[!is.na(res_4$padj) & res_4$padj < 0.05 & abs(res_4$log2FoldChange) > 1, ]
+res_5_filtered <- res_5[!is.na(res_5$padj) & res_5$padj < 0.05 & abs(res_5$log2FoldChange) > 1, ]
+res_6_filtered <- res_6[!is.na(res_6$padj) & res_6$padj < 0.05 & abs(res_6$log2FoldChange) > 1, ]
+```
+
+### Step 10: Combine and Visualize Enriched ASVs
+```{r Combine and Visualize Enriched ASVs}
+# Combine ASVs from different contrasts and filter taxonomy
+asvs_filtered <- unique(c(rownames(res_1_filtered), rownames(res_2_filtered)))
+
+taxonomy_info_filtered <- taxonomy_info[top_var_taxa, ]
+taxonomy_labels_filtered <- apply(taxonomy_info_filtered, 1, function(x) {
+     phylum <- ifelse(is.na(x["Phylum"]), "Unknown", x["Phylum"])
+     class <- ifelse(is.na(x["Class"]), "Unknown", x["Class"])
+     family <- ifelse(is.na(x["Family"]), "Unknown", x["Family"])
+     paste(phylum, class, family, sep = " | ")
+ })
+
+rownames(vsd_matrix_filtered) <- taxonomy_labels_filtered
+
+# Combine filtered results into one data frame
+log2FC_data <- rbind(
+  data.frame(ASV = rownames(res_1_filtered), log2FC = res_1_filtered$log2FoldChange, Zone = "Impaired vs Basin"),
+  data.frame(ASV = rownames(res_2_filtered), log2FC = res_2_filtered$log2FoldChange, Zone = "Impaired vs Fringe")
+)
+
+# Merge taxonomy information with log2 fold changes
+df_enriched <- merge(log2FC_data, taxonomy_labels_filtered, by.x = "ASV", by.y = "row.names")
+
+# Step 3: Aggregate log2 fold changes by phylum
+# Aggregate log2 fold changes for both contrasts
+df_aggregated <- aggregate(
+  log2FC ~ y + Zone,
+  data = df_enriched,
+  FUN = sum
+)
+
+# Rename columns for clarity
+colnames(df_aggregated) <- c("Phylum", "Zone", "total_log2FC")
+
+# Create a bar plot for enriched phyla
+ggplot(df_aggregated, aes(x = Phylum, y = total_log2FC, fill = Zone)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  theme_minimal() +
+  labs(
+    title = "Enriched Phyla by Zone",
+    x = "Phylum",
+    y = "Total Log2 Fold Change"
+  ) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+```{r heatmap depth}
+
+# Step 1: Create data frames for depth-related contrasts (5cm vs 20cm and 5cm vs 40cm)
+df_depth_5_20 <- data.frame(
+  Phylum = rownames(res_4_filtered),  # Results for 5cm vs 20cm contrast
+  Depth = rep("5cm vs 20cm", length(rownames(res_4_filtered))),
+  log2FC = res_4_filtered$log2FoldChange
+)
+
+df_depth_5_40 <- data.frame(
+  Phylum = rownames(res_5_filtered),  # Results for 5cm vs 40cm contrast
+  Depth = rep("5cm vs 40cm", length(rownames(res_5_filtered))),
+  log2FC = res_5_filtered$log2FoldChange
+)
+
+# Step 2: Combine data from both depth contrasts into a single data frame
+df_depth_combined <- rbind(df_depth_5_20, df_depth_5_40)
+
+# Step 3: Filter the matrix and taxonomy info to keep only relevant ASVs
+asvs_5cm_40cm <- unique(rownames(res_4_filtered))  # ASVs for 5cm vs 40cm contrast
+asvs_5cm_20cm <- unique(rownames(res_5_filtered))  # ASVs for 5cm vs 20cm contrast
+
+# Combine all ASVs across comparisons
+asvs_filtered <- unique(c(asvs_5cm_40cm, asvs_5cm_20cm))
+
+# Step 4: Filter the matrix and taxonomy info based on the relevant ASVs
+vsd_matrix_filtered <- vsd_matrix[rownames(vsd_matrix) %in% asvs_filtered, ]
+taxonomy_info_filtered <- taxonomy_info[asvs_filtered, ]
+
+# Step 5: Create taxonomy labels
+taxonomy_labels_filtered <- apply(taxonomy_info_filtered, 1, function(x) {
+  phylum <- ifelse(is.na(x["Phylum"]), "Unknown", x["Phylum"])
+  class <- ifelse(is.na(x["Class"]), "Unknown", x["Class"])
+  family <- ifelse(is.na(x["Family"]), "Unknown", x["Family"])
+  paste(phylum, class, family, sep = " | ")
+})
+
+# Step 6: Add taxonomy labels to the combined data frame
+df_depth_combined$Taxonomy <- taxonomy_labels_filtered[match(df_depth_combined$Phylum, rownames(taxonomy_info_filtered))]
+
+# Step 8: Rank the taxa by absolute log2FC value
+df_depth_combined$abs_log2FC <- abs(df_depth_combined$log2FC)
+
+# Step 9: Select the top 20 taxa based on absolute log2FC values
+df_top_20_taxa <- df_depth_combined %>%
+  group_by(Taxonomy) %>%
+  top_n(20, abs_log2FC) %>%
+  arrange(desc(abs_log2FC))
+
+# Step 10: Sort the selected taxa by absolute log2FC
+df_top_20_taxa_sorted <- df_top_20_taxa %>%
+  arrange(desc(abs_log2FC))
+
+# Step 11: Select the top 20 taxa for the final visualization
+df_top_20_selected <- head(df_top_20_taxa_sorted, 20)  # Adjust to select top 20 instead of 40
+
+# Step 12: Plot the final heatmap for the top 20 highly contrasting ASVs
+Heatmap_depth<-ggplot(df_top_20_selected, aes(x = Depth, y = Taxonomy, fill = log2FC)) +
+  geom_tile() +
+  scale_fill_gradientn(colors = c("blue", "white", "red"), name = "Log2 Fold Change") +     theme_minimal() +
+  theme(
+    #axis.title.x = element_blank(),  # Remove X axis title
+    axis.title.y = element_blank(),  # Remove Y axis title
+    axis.text.y = element_text(size = 8),  # Adjust y-axis labels size
+   # axis.text.x = element_text(angle = 0, hjust = 1),  # Rotate x-axis labels for better readability
+    plot.title = element_text(hjust = 0.5, size = 14)  # Center and increase title size
+  ) +
+  scale_x_discrete(expand = c(0.1, 0.1))  # Adjust x-axis spacing
+```
+
+```{r zone}
+# Step 1: Create data frames for zone-related contrasts (Impaired vs Basin, Impaired vs Fringe, Basin vs Fringe)
+df_zone_impaired_basin <- data.frame(
+  Phylum = rownames(res_1_filtered),  # Results for Impaired vs Basin contrast
+  Zone = rep("Impaired vs Basin", length(rownames(res_1_filtered))),
+  log2FC = res_1_filtered$log2FoldChange
+)
+
+df_zone_impaired_fringe <- data.frame(
+  Phylum = rownames(res_2_filtered),  # Results for Impaired vs Fringe contrast
+  Zone = rep("Impaired vs Fringe", length(rownames(res_2_filtered))),
+  log2FC = res_2_filtered$log2FoldChange
+)
+
+df_zone_basin_fringe <- data.frame(
+  Phylum = rownames(res_3_filtered),  # Results for Basin vs Fringe contrast
+  Zone = rep("Basin vs Fringe", length(rownames(res_3_filtered))),
+  log2FC = res_3_filtered$log2FoldChange
+)
+
+# Step 2: Combine data from all zone contrasts into a single data frame
+df_zone_combined <- rbind(df_zone_impaired_basin, df_zone_impaired_fringe, df_zone_basin_fringe)
+
+# Step 3: Filter the matrix and taxonomy info to keep only relevant ASVs
+asvs_impaired_basin <- unique(rownames(res_1_filtered))  # ASVs for Impaired vs Basin contrast
+asvs_impaired_fringe <- unique(rownames(res_2_filtered))  # ASVs for Impaired vs Fringe contrast
+asvs_basin_fringe <- unique(rownames(res_3_filtered))  # ASVs for Basin vs Fringe contrast
+
+# Combine all ASVs across comparisons
+asvs_filtered <- unique(c(asvs_impaired_basin, asvs_impaired_fringe, asvs_basin_fringe))
+
+# Step 4: Filter the matrix and taxonomy info based on the relevant ASVs
+vsd_matrix_filtered <- vsd_matrix[rownames(vsd_matrix) %in% asvs_filtered, ]
+taxonomy_info_filtered <- taxonomy_info[asvs_filtered, ]
+
+# Step 5: Create taxonomy labels
+taxonomy_labels_filtered <- apply(taxonomy_info_filtered, 1, function(x) {
+  phylum <- ifelse(is.na(x["Phylum"]), "Unknown", x["Phylum"])
+  class <- ifelse(is.na(x["Class"]), "Unknown", x["Class"])
+  family <- ifelse(is.na(x["Family"]), "Unknown", x["Family"])
+  paste(phylum, class, family, sep = " | ")
+})
+
+# Step 6: Add taxonomy labels to the combined data frame
+df_zone_combined$Taxonomy <- taxonomy_labels_filtered[match(df_zone_combined$Phylum, rownames(taxonomy_info_filtered))]
+
+# Step 8: Rank the taxa by absolute log2FC value
+df_zone_combined$abs_log2FC <- abs(df_zone_combined$log2FC)
+
+# Step 9: Select the top 20 taxa based on absolute log2FC values
+df_top_20_taxa <- df_zone_combined %>%
+  group_by(Taxonomy) %>%
+  top_n(20, abs_log2FC) %>%
+  arrange(desc(abs_log2FC))
+
+# Step 10: Sort the selected taxa by absolute log2FC
+df_top_20_taxa_sorted <- df_top_20_taxa %>%
+  arrange(desc(abs_log2FC))
+
+# Step 11: Select the top 20 taxa for the final visualization
+df_top_20_selected <- head(df_top_20_taxa_sorted, 20)  # Adjust to select top 20 instead of 40
+
+# Step 12: Plot the final heatmap for the top 20 highly contrasting ASVs
+Heatmap_zone <- ggplot(df_top_20_selected, aes(x = Zone, y = Taxonomy, fill = log2FC)) +
+  geom_tile() +
+  scale_fill_gradientn(colors = c("blue", "white", "red"), name = "Log2 Fold Change") +  # Improved color scale
+  theme_minimal() +
+  theme(
+    #axis.title.x = element_blank(),  # Remove X axis title
+    axis.title.y = element_blank(),  # Remove Y axis title
+    axis.text.y = element_text(size = 8),  # Adjust y-axis labels size
+   # axis.text.x = element_text(angle = 0, hjust = 1),  # Rotate x-axis labels for better readability
+    legend.position = "none",        # Remove legend
+    plot.title = element_text(hjust = 0.5, size = 14)  # Center and increase title size
+  ) +
+  scale_x_discrete(expand = c(0.1, 0.1))  # Adjust x-axis spacing
+```
+
+```{r combined plots}
+# Combine the plots
+combined_plot <- Heatmap_zone / Heatmap_depth
+
+# Add labels A and B
+combined_plot <- combined_plot +
+  plot_annotation(
+    tag_levels = 'A'  # Automatically label A and B to the panels
+    #tag_color = 'black'
+  ) +
+  plot_layout(
+    widths = c(1, 1),  # Equal widths for both panels
+    guides = 'collect'  # Collect legends
+  )
+
+ggsave("combined_plot.png", plot = combined_plot, 
+       width = 10, height = 7,  # Increased width to avoid overlap
+       dpi = 300,               # High resolution for print
+       units = "in",            # Units in inches
+       device = "png",          # Ensure PNG format
+       bg = "white"             # White background to avoid transparency issues
+)
+```
+

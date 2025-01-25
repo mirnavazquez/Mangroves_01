@@ -1,0 +1,342 @@
+---
+title: "PICRUST2"
+author: "Mirna Vazquez Rosas Landa"
+date: "2025-01-24"
+output: html_document
+---
+
+```{python}
+conda activate picrust2
+picrust2_pipeline.py -s seqs.fasta -i table.biom -o picrust2_manglar_new_final -p 3 --in_traits COG,EC,KO,PFAM,TIGRFAM --verbose
+cd picrust2_manglar_new_final/
+add_descriptions.py -i EC_metagenome_out/pred_metagenome_unstrat.tsv.gz  -m EC  -o EC_metagenome_out/pred_metagenome_unstrat_descrip.tsv.gz
+add_descriptions.py -i KO_metagenome_out/pred_metagenome_unstrat.tsv.gz  -m KO  -o KO_metagenome_out/pred_metagenome_unstrat_descrip.tsv.gz
+add_descriptions.py -i COG_metagenome_out/pred_metagenome_unstrat.tsv.gz -m COG -o COG_metagenome_out/pred_metagenome_unstrat_descrip.tsv.gz
+add_descriptions.py -i pathways_out/path_abun_unstrat.tsv.gz -m METACYC -o pathways_out/path_abun_unstrat_descrip.tsv.gz
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r libraries}
+library(readr)
+library(ggpicrust2)
+library(tibble)
+library(tidyverse)
+library(ggprism)
+library(patchwork)
+library(ggh4x)
+library(pheatmap)
+```
+
+```{r read-data}
+# Read data
+data_table_f <- read_tsv(
+  "data/02_Picrust/picrust2_manglar_new_final/KO_metagenome_out/pred_metagenome_unstrat.tsv"
+) %>%
+  rename(KO = `function`) %>%
+  column_to_rownames("KO")
+
+count_data_transformed <- data_table_f + 1
+
+metadata <- read_delim("data/Metadata.csv", delim = ",",
+                       escape_double = FALSE, trim_ws = TRUE) %>%
+  select(-lat) %>%
+  mutate(Site = case_when(
+    zone == "Fringe" ~ "ND",
+    zone == "Impaired" ~ "D",
+    zone == "Basin" ~ "MD"
+  )) %>%
+  filter(!seqR1 == "zr2502_16_R1")
+
+DiTing_cycles <- suppressMessages(
+  read_delim(
+    "https://raw.githubusercontent.com/xuechunxu/DiTing/master/table/KO_affilated_to_biogeochemical_cycle.tab",
+    delim = "\t"
+  ) %>%
+    fill(Cycle) %>%
+    fill(Pathway) %>%
+    rename(Pathway_cycle = Pathway, KO = k_number, Detail_cycle = Detail)
+)
+
+ko_list<-read_delim("http://rest.kegg.jp/list/ko",  
+                    delim="\t", col_names = F) %>%
+  rename(KO_description = X2) %>%
+  rename(KO = X1 ) %>%
+  mutate(KO=str_remove_all(KO, "ko:"))
+```
+
+```{r annotations}
+# Define colors
+annotation_colors <- list(
+  zone = c(Fringe = "#3288BD", Impaired = "red"),
+  season = c(dry = "darkorange", flood = "#D6ED17FF"),
+  depth = c(`5` = "#D9B68AFF", `40` = "#5A3222FF"),
+  Cycle = c(
+    "Nitrogen metabolism" = "#00FF00",
+    "Sulfur metabolism" = "#800080",
+    "Methane metabolism" = "#FFFF00"
+  ),
+  Pathway_cycle = c(
+    "Methanogenesis, methylamine -> methane" = "#FFD700",
+    "Methanogenesis, methanol => methane" = "#FFBF00",
+    "Methanogenesis, acetate => methane" = "#FFAA00",
+    "Methanogenesis, CO2 => methane" = "#FF8C00",
+    "Methanogenesis, trimethylamine -> methane" = "#FF7518",
+    "Methane oxidation, methane -> methanol" = "#FFFF00",
+    "Dissimilatory nitrate reduction, nitrate -> nitrite (narGHI or napAB)" = "#98FB98",
+    "Denitrification, nitrite -> nitric oxide (nirK or nirS)" = "#00FA9A",
+    "Dissimilatory nitrate reduction, nitrite -> ammonia (nirBD or nrfAH)" = "#32CD32",
+    "Assimilatory nitrate reduction, nitrate -> nitrite (narB or NR or nasAB)" = "#228B22",
+    "Nitrogen fixation, nitrogen -> ammonia (nifKDH or vnfDKGH)" = "#006400",
+    "Denitrification, nitric oxide -> nitrous oxide (norBC)" = "#2E8B57",
+    "Alternative thiosulfate oxidation (tsdA)" = "#D8BFD8",
+    "DMSO reduction, DMSO -> DMS (dms or dorA)" = "#BA55D3",
+    "Assimilatory sulfate reduction, sulfate -> sulfite" = "#8A2BE2",
+    "DMS oxidation, DMS -> DMSO (ddhABC or tmm)" = "#9370DB",
+    "Sulfite oxidation, sulfite -> sulfate (sorB, SUOX, soeABC)" = "#6A5ACD",
+    "Thiosulfate oxidation by SOX complex, thiosulfate -> sulfate" = "#8B008B",
+    "Sulfoquinovose degradation (sulfo-EMP pathway) (yihSVTU)" = "#9400D3"
+  )
+)
+```
+
+```{r heatmap}
+metadata_zone<- metadata %>% filter(!Site=="MD")
+valid_columns <- intersect(metadata_zone$seqR1, colnames(count_data_transformed))
+kegg_abundance_zone <- count_data_transformed %>% select(all_of(valid_columns))
+
+kegg_abundance_zone_DT<-kegg_abundance_zone %>%
+  rownames_to_column("KO") %>%
+  left_join(DiTing_cycles, by="KO") %>%
+  drop_na(Cycle) %>%
+  filter(Cycle == c("Nitrogen metabolism", "Methane metabolism", "Sulfur metabolism")) %>%
+  select(KO, starts_with("zr2502")) %>%
+  distinct() %>%
+  column_to_rownames("KO")
+
+daa_results_df_zone <- pathway_daa(abundance = kegg_abundance_zone_DT, 
+                               metadata = metadata_zone, 
+                               group = "Site",
+                               daa_method = "DESeq2", 
+                               select = NULL, reference = NULL)
+
+daa_annotated_sub_method_results_df_zone<-daa_results_df_zone %>%
+  dplyr::filter(p_adjust < 0.05) %>%    # Select statistically significant KOs
+  dplyr::arrange(p_adjust) %>%
+  rename(KO = feature) %>%
+  left_join(DiTing_cycles, by="KO") %>%
+  drop_na(Cycle)
+
+# Prepare the heatmap matrix
+lista_ko<-unique(daa_annotated_sub_method_results_df_zone$KO)
+
+kegg_zones <- kegg_abundance_zone_DT %>%
+  rownames_to_column("KO") %>%
+  filter(KO %in% lista_ko) %>%
+  left_join(ko_list, by = "KO") %>%
+  unite("KO_combined", KO, KO_description, sep = "-") %>%
+  column_to_rownames("KO_combined")
+
+
+heatmap_matrix <- as.matrix(kegg_zones)
+
+# Prepare column annotations (Pathway_cycle)
+# Assuming sample IDs in `kegg_abundance2_n` match `group1` or `group2` in annotations
+pathway_annotation_zone <- daa_annotated_sub_method_results_df_zone %>%
+  select(KO, Pathway_cycle) %>%
+  distinct(KO, .keep_all = TRUE) %>%
+  left_join(ko_list, by ="KO") %>%
+  unite("KO_combined", KO, KO_description, sep = "-") %>%
+  column_to_rownames("KO_combined")
+
+pathway_annotation_zone$Pathway_cycle <- trimws(pathway_annotation_zone$Pathway_cycle)
+
+# Agrupar columnas (muestras) por zona
+zone_annotation <- metadata_zone %>%
+  select(seqR1, zone) %>%
+  distinct() %>%
+  column_to_rownames("seqR1")
+
+# Generate the heatmap
+heatmap_zone<-pheatmap(heatmap_matrix,
+         cluster_rows = TRUE,
+         cluster_cols = TRUE,
+         show_rownames = TRUE,
+         show_colnames = F,
+         cutree_rows = 6,
+         annotation_row = pathway_annotation_zone,
+         annotation_col = zone_annotation,
+         annotation_colors = annotation_colors,
+         annotation_names_row =F,
+         color = colorRampPalette(c("blue", "white", "red"))(100),
+         scale = "row",
+         main = "Filtered Heatmap of KEGG Abundance"
+)
+
+# Save the heatmap as a pdf file with specified dimensions
+ggsave("heatmap_zone.pdf", plot = heatmap_zone, 
+       width = 20, height = 9, units = "in", dpi = 300)
+```
+
+```{r}
+metadata_depth<- metadata %>% 
+  filter(!depth=="20")
+valid_columns <- intersect(metadata_depth$seqR1, colnames(count_data_transformed))
+kegg_abundance_depth <- count_data_transformed %>% 
+  select(all_of(valid_columns))
+
+kegg_abundance_depth_DT<-kegg_abundance_depth %>%
+  rownames_to_column("KO") %>%
+  left_join(DiTing_cycles, by="KO") %>%
+  drop_na(Cycle) %>%
+  filter(Cycle == c("Nitrogen metabolism", "Methane metabolism", "Sulfur metabolism")) %>%
+  select(KO, starts_with("zr2502")) %>%
+  distinct() %>%
+  column_to_rownames("KO")
+
+daa_results_df_depth <- pathway_daa(abundance = kegg_abundance_depth_DT, 
+                                   metadata = metadata_depth, 
+                                   group = "depth",
+                                   daa_method = "DESeq2", 
+                                   select = NULL, reference = NULL)
+
+daa_annotated_sub_method_results_df_depth<-daa_results_df_depth %>%
+  dplyr::filter(p_adjust < 0.05) %>%    # Select statistically significant KOs
+  dplyr::arrange(p_adjust) %>%
+  rename(KO = feature) %>%
+  left_join(DiTing_cycles, by="KO") %>%
+  drop_na(Cycle)
+
+# Prepare the heatmap matrix
+lista_ko<-unique(daa_annotated_sub_method_results_df_depth$KO)
+
+
+kegg_depth <- kegg_abundance_depth_DT %>%
+  rownames_to_column("KO") %>%
+  filter(KO %in% lista_ko) %>%
+  left_join(ko_list, by = "KO") %>%
+  unite("KO_combined", KO, KO_description, sep = "-") %>%
+  column_to_rownames("KO_combined")
+
+
+heatmap_matrix <- as.matrix(kegg_depth)
+
+# Prepare column annotations (Pathway_cycle)
+# Assuming sample IDs in `kegg_abundance2_n` match `group1` or `group2` in annotations
+pathway_annotation_depth <- daa_annotated_sub_method_results_df_depth %>%
+  select(KO, Pathway_cycle) %>%
+  distinct(KO, .keep_all = TRUE) %>%
+  left_join(ko_list, by ="KO") %>%
+  unite("KO_combined", KO, KO_description, sep = "-") %>%
+  column_to_rownames("KO_combined")
+
+pathway_annotation_depth$Pathway_cycle <- trimws(pathway_annotation_depth$Pathway_cycle)
+
+# Agrupar columnas (muestras) por zona
+depth_annotation <- metadata_depth %>%
+  select(seqR1, depth) %>%
+  distinct() %>%
+  column_to_rownames("seqR1")
+
+# Generate the heatmap
+heatmap_depth<-pheatmap(heatmap_matrix,
+                       cluster_rows = TRUE,
+                       cluster_cols = TRUE,
+                       show_rownames = TRUE,
+                       show_colnames = F,
+                       cutree_rows = 2,
+                       annotation_row = pathway_annotation_depth,
+                       annotation_col = depth_annotation,
+                       annotation_colors = annotation_colors,
+                       annotation_names_row =F,
+                       color = colorRampPalette(c("blue", "white", "red"))(100),
+                       scale = "row",
+                       main = "Filtered Heatmap of KEGG Abundance"
+)
+
+# Save the heatmap as a pdf file with specified dimensions
+ggsave("heatmap_depth.pdf", plot = heatmap_depth, 
+       width = 20, height = 9, units = "in", dpi = 300)
+```
+
+```{r}
+valid_columns <- intersect(metadata$seqR1, colnames(count_data_transformed))
+kegg_abundance_season <- count_data_transformed %>% 
+  select(all_of(valid_columns))
+
+kegg_abundance_season_DT<-kegg_abundance_season %>%
+  rownames_to_column("KO") %>%
+  left_join(DiTing_cycles, by="KO") %>%
+  drop_na(Cycle) %>%
+  filter(Cycle == c("Nitrogen metabolism", "Methane metabolism", "Sulfur metabolism")) %>%
+  select(KO, starts_with("zr2502")) %>%
+  distinct() %>%
+  column_to_rownames("KO")
+
+daa_results_df_season <- pathway_daa(abundance = kegg_abundance_season_DT, 
+                                    metadata = metadata, 
+                                    group = "season",
+                                    daa_method = "DESeq2", 
+                                    select = NULL, reference = NULL)
+
+daa_annotated_sub_method_results_df_season<-daa_results_df_season %>%
+  dplyr::filter(p_adjust < 0.05) %>%    # Select statistically significant KOs
+  dplyr::arrange(p_adjust) %>%
+  rename(KO = feature) %>%
+  left_join(DiTing_cycles, by="KO") %>%
+  drop_na(Cycle)
+
+# Prepare the heatmap matrix
+lista_ko<-unique(daa_annotated_sub_method_results_df_season$KO)
+
+kegg_season <- kegg_abundance_season_DT %>%
+  rownames_to_column("KO") %>%
+  filter(KO %in% lista_ko) %>%
+  left_join(ko_list, by = "KO") %>%
+  unite("KO_combined", KO, KO_description, sep = "-") %>%
+  column_to_rownames("KO_combined")
+
+
+heatmap_matrix <- as.matrix(kegg_season)
+
+# Prepare column annotations (Pathway_cycle)
+# Assuming sample IDs in `kegg_abundance2_n` match `group1` or `group2` in annotations
+pathway_annotation_season <- daa_annotated_sub_method_results_df_season %>%
+  select(KO, Pathway_cycle) %>%
+  distinct(KO, .keep_all = TRUE) %>%
+  left_join(ko_list, by ="KO") %>%
+  unite("KO_combined", KO, KO_description, sep = "-") %>%
+  column_to_rownames("KO_combined")
+
+pathway_annotation_season$Pathway_cycle <- trimws(pathway_annotation_season$Pathway_cycle)
+
+# Agrupar columnas (muestras) por zona
+season_annotation <- metadata %>%
+  select(seqR1, season) %>%
+  distinct() %>%
+  column_to_rownames("seqR1")
+
+# Generate the heatmap
+heatmap_season<-pheatmap(heatmap_matrix,
+                       cluster_rows = TRUE,
+                       cluster_cols = TRUE,
+                       show_rownames = TRUE,
+                       show_colnames = F,
+                       cutree_rows = 2,
+                       annotation_row = pathway_annotation_season,
+                       annotation_col = season_annotation,
+                       annotation_colors = annotation_colors,
+                       annotation_names_row =F,
+                       color = colorRampPalette(c("blue", "white", "red"))(100),
+                       scale = "row",
+                       main = "Filtered Heatmap of KEGG Abundance"
+)
+
+# Save the heatmap as a pdf file with specified dimensions
+ggsave("heatmap_season.pdf", plot = heatmap_season, 
+       width = 20, height = 9, units = "in", dpi = 300)
+```
+
+
