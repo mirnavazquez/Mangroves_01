@@ -434,14 +434,24 @@ pcoa_df$zone <- factor(pcoa_df$zone, levels = c("Fringe", "Basin", "Impaired"))
 ## PCoA Plot Faceted by Season and Depth 
 
 ```{r}
+annotation_colors <- list(
+  Zone = c(
+    Fringe = "#3288BD",  # Medium ocean blue
+    Basin = "#66C2A5",   # Soft teal-green
+    Impaired = "red"
+  )
+)
+
 pcoa_plot_faceted <- ggplot(pcoa_df, aes(x = PCoA1, y = PCoA2, color = zone)) +
-  geom_point(size = 3, alpha = 0.7) +
+  geom_point(size = 3, alpha = 0.7) +  # Add transparency to points for better visualization
   geom_mark_ellipse(
     aes(group = zone, fill = zone),
-    alpha = 0.2,
+    alpha = 0.2, # Adjust transparency of ellipses
     show.legend = FALSE,
-    expand = unit(0.5, "mm")
+    expand = unit(0.5, "mm")  # Control the size of ellipses
   ) +
+  scale_color_manual(values = annotation_colors$Zone) +  # Apply custom colors for points
+  scale_fill_manual(values = annotation_colors$Zone) +   # Apply custom colors for ellipses
   theme_minimal() +
   labs(
     title = "PCoA of Microbial Community by Zone",
@@ -452,14 +462,15 @@ pcoa_plot_faceted <- ggplot(pcoa_df, aes(x = PCoA1, y = PCoA2, color = zone)) +
   ) +
   facet_grid(season ~ depth) +
   theme(
-    strip.text = element_text(size = 8, face = "bold"),
-    axis.title = element_text(size = 8, face = "bold"),
-    axis.text = element_text(size = 6),
-    legend.text = element_text(size = 7),
-    legend.title = element_text(size = 8, face = "bold"),
-    plot.title = element_text(size = 10, face = "bold"),
-    plot.subtitle = element_text(size = 8)
+    strip.text = element_text(size = 8, face = "bold"), # Increase and bold facet label size
+    axis.title = element_text(size = 8, face = "bold"), # Adjust axis title size
+    axis.text = element_text(size = 6),                # Adjust axis text size
+    legend.text = element_text(size = 7),              # Adjust legend text size
+    legend.title = element_text(size = 8, face = "bold"), # Adjust legend title size
+    plot.title = element_text(size = 10, face = "bold"),  # Adjust plot title size
+    plot.subtitle = element_text(size = 8)               # Add subtitle size
   )
+
 ```
 - **`ggplot()`**: Creates the PCoA plot with `PCoA1` on the x-axis and `PCoA2` on the y-axis.
 - **`geom_point()`**: Plots the samples as points, with `color = zone` representing the microbial zones.
@@ -549,4 +560,70 @@ ggsave(
   dpi = 300,    # Resolution
   units = "in"  # Units for width and height
 )
+```
+
+# Supplememntary plot
+
+```{r}
+# Combine Betadisper Plots into a Mixed Plot
+
+# Ensure all necessary Betadisper plots are created
+# Dispersion plot by Zone
+betadisper_zone_plot <- ggplot(dispersion_df, aes(x = Zone, y = Distances)) +
+  geom_boxplot(fill = "skyblue") +
+  theme_minimal() +
+  labs(
+    title = "Dispersion by Zone",
+    x = "Zone",
+    y = "Bray-Curtis Distance"
+  )
+
+# Dispersion plot by Season
+betadisper_season <- betadisper(bray_dist, sample_data(ps3)$season)
+dispersion_season_plot <- ggplot(data.frame(
+  Season = sample_data(ps3)$season,
+  Distances = betadisper_season$distances
+), aes(x = Season, y = Distances)) +
+  geom_boxplot(fill = "lightgreen") +
+  theme_minimal() +
+  labs(
+    title = "Dispersion by Season",
+    x = "Season",
+    y = "Bray-Curtis Distance"
+  )
+
+# Dispersion plot by Depth
+betadisper_depth <- betadisper(bray_dist, sample_data(ps3)$depth)
+dispersion_depth_plot <- ggplot(data.frame(
+  Depth = sample_data(ps3)$depth,
+  Distances = betadisper_depth$distances
+), aes(x = Depth, y = Distances)) +
+  geom_boxplot(fill = "lightcoral") +
+  theme_minimal() +
+  labs(
+    title = "Dispersion by Depth",
+    x = "Depth",
+    y = "Bray-Curtis Distance"
+  )
+
+# Dispersion plot by Depth Group
+dispersion_depth_group_plot <- ggplot(data.frame(
+  DepthGroup = sample_data(ps3)$depth_group,
+  Distances = betadisper_depth_groups$distances
+), aes(x = DepthGroup, y = Distances)) +
+  geom_boxplot(fill = "plum") +
+  theme_minimal() +
+  labs(
+    title = "Dispersion by Depth Group",
+    x = "Depth Group",
+    y = "Bray-Curtis Distance"
+  )
+
+# Combine all plots into a single figure using patchwork
+combined_plot <- (betadisper_zone_plot | dispersion_season_plot) /
+  (dispersion_depth_plot | dispersion_depth_group_plot)
+
+# Save and display the mixed plot
+ggsave("mixed_betadisper_plot.png", combined_plot, width = 12, height = 10, dpi = 300)
+print(combined_plot)
 ```
