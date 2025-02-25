@@ -1,0 +1,82 @@
+---
+title: "Creating Phyloseq Object"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+# Introduction
+
+This RMarkdown outlines the steps to create a Phyloseq object from metagenomic sequencing data.
+
+## Load Libraries
+
+```{r setup-libraries}
+library(tidyverse)
+library(vegan)
+library(ggplot2)
+library(DECIPHER)
+library(phangorn)
+library(phyloseq)
+```
+
+## Load Saved Data
+
+```{r load-data}
+load(file = "data_ok.RData")
+```
+
+## Metadata Handling
+
+```{r handle-metadata}
+metadata <- read_csv("Metadata.csv") %>%
+  mutate_at(vars(depth), as.character) %>%
+  column_to_rownames("seqR1")
+```
+
+## Phylogenetic Tree Construction
+
+```{r phylogenetic-tree}
+ASVs.nochim = DNAStringSet(colnames(seqtab.nochim))
+names(ASVs.nochim) = paste0("ASV", 1:ncol(seqtab.nochim))
+
+alignment = AlignSeqs(ASVs.nochim, anchor=NA, processors=30)
+phang.align <- phyDat(as(alignment, "matrix"), type="DNA")
+dm <- dist.ml(phang.align)
+treeNJ <- NJ(dm)
+
+fit = pml(treeNJ, data=phang.align)
+fitGTR_green <- update(fit, k=4, inv=0.2)
+save(fitGTR_green, file="tree.green.ok.RData")
+```
+
+## Creating Phyloseq Object
+
+```{r create-phyloseq-object}
+load("tree.green.ok.RData")
+
+rownames(seqtab.nochim) <- gsub(".fastq.gz", "", rownames(seqtab.nochim))
+tmp.seqtab = seqtab.nochim
+colnames(tmp.seqtab) = names(ASVs.nochim)
+tmp.taxa = taxa
+rownames(tmp.taxa) = names(ASVs.nochim)
+
+ps.green.nochim = phyloseq(
+  otu_table(tmp.seqtab, taxa_are_rows=FALSE),
+  sample_data(metadata),
+  tax_table(tmp.taxa),
+  refseq(ASVs.nochim),
+  phy_tree(fitGTR_green$tree))
+
+save(ps.green.nochim, file="phyloseq_green_ok.RDATA")
+```
+
+## Root the Tree
+
+```{r root-tree}
+load("phyloseq_green_ok.RDATA")
+ps = ps.green.nochim
+set.seed(1)
+phy_tree(ps) <- root(phy_tree(ps), sample(taxa_names(ps), 1), resolve.root = TRUE)
+is.rooted(phy_tree(ps))
+save(ps, file="phyloseq_green_root_ok.RDATA")
+```

@@ -1,0 +1,92 @@
+---
+title: "Prevalence Analysis"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+# Introduction
+
+This RMarkdown outlines the steps to analyze the prevalence of taxa within a Phyloseq object.
+
+## Load Libraries
+
+```{r setup-libraries}
+library(tidyverse)
+library(phyloseq)
+library(ggplot2)
+```
+
+## Load the Phyloseq Object
+
+```{r load-phyloseq-object}
+load("data/00_RData/ps.pruned.green.RDATA")
+ps.pruned.1 <- subset_taxa(ps.pruned, !is.na(Phylum) & !Phylum %in% c("", "uncharacterized"))
+```
+
+## Prevalence Computation
+
+```{r prevalence-computation}
+prevdf = apply(X = otu_table(ps.pruned.1),
+               MARGIN = ifelse(taxa_are_rows(ps.pruned.1), yes = 1, no = 2),
+               FUN = function(x){sum(x > 0)})
+
+prevdf = data.frame(Prevalence = prevdf,
+                    TotalAbundance = taxa_sums(ps.pruned.1),
+                    tax_table(ps.pruned.1))
+
+head(prevdf)
+```
+
+## Filtering and Plotting Prevalence
+
+```{r filtering-plotting}
+temp_df <- plyr::ddply(prevdf, "Phylum", 
+                       function(df1){
+                         cbind(mean(df1$Prevalence),
+                               sum(df1$Prevalence))})
+
+filterPhyla <- temp_df[temp_df$`2` < 2,]$Phylum
+ps1 = subset_taxa(ps.pruned, !Phylum %in% filterPhyla)
+prevdf1 = subset(prevdf, Phylum %in% get_taxa_unique(ps1, "Phylum"))
+
+ggplot(prevdf1, aes(TotalAbundance, Prevalence / nsamples(ps1), color=Phylum)) +
+  geom_hline(yintercept = 0.02, alpha = 0.5, linetype = 2) + 
+  geom_point(size = 1, alpha = 0.7) +
+  scale_x_log10() + xlab("Total Abundance") + ylab("Prevalence [Frac. Samples]") +
+  facet_wrap(~Phylum) + theme(legend.position="none")
+```
+
+## Define Prevalence Threshold
+
+```{r define-threshold}
+prevalenceThreshold = 0.02 * nsamples(ps1)
+prevalenceThreshold
+```
+
+## Execute Prevalence Filter
+
+```{r execute-filter}
+keepTaxa = rownames(prevdf1)[(
+ prevdf1$Prevalence >= prevalenceThreshold)]
+ps2 = prune_taxa(keepTaxa, ps1)
+
+# Re-plot with new threshold for visibility
+ggplot(prevdf1, aes(TotalAbundance, Prevalence / nsamples(ps2), color=Phylum)) +
+  geom_hline(yintercept = 0.05, alpha = 0.5, linetype = 2) + geom_point(size = 2, alpha = 0.7) +
+  scale_x_log10() + xlab("Total Abundance") + ylab("Prevalence [Frac. Samples]") +
+  facet_wrap(~Phylum) + theme(legend.position="none")
+```
+
+## Removing Samples and Saving Results
+
+```{r removing-saving}
+# Coerce OTU table to data frame for further operations
+OTU1 = as(otu_table(ps2), "matrix")
+if(taxa_are_rows(ps2)){OTU1 <- t(OTU1)}
+OTUdf = as.data.frame(OTU1)
+OTUdf_prop <- OTUdf/rowSums(OTUdf)
+
+ps3 = subset_samples(ps2, sample_names(ps2) != 'zr2502_16_R1')
+
+save(ps2, ps3, file = "ps.prevalence.green.RDATA")
+```

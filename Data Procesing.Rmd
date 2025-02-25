@@ -1,0 +1,127 @@
+---
+title: "Analysis Workflow using DADA2"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+# Introduction
+
+This document details the steps for processing and analyzing sequencing data using the DADA2 pipeline. It includes preprocessing, quality control, error modeling, merging paired reads, removing chimeras, and taxonomic assignment.
+
+## Prerequisites
+
+Before running this script, ensure all required libraries are installed:
+
+```{r setup, include=FALSE}
+library(dada2)
+library(Biostrings)
+library(ShortRead)
+```
+
+## Data Preparation
+
+### Set Up Paths
+
+```{r}
+# Define the input and output directories
+path.cut <- file.path("cutadapt/")
+if(!dir.exists(path.cut)) dir.create(path.cut)
+
+# List files
+cutFs <- sort(list.files(path.cut, pattern = "_R1.fastq.gz", full.names = TRUE))
+cutRs <- sort(list.files(path.cut, pattern = "_R2.fastq.gz", full.names = TRUE))
+
+# Extract sample names
+get.sample.name <- function(fname) strsplit(basename(fname), "_")[[1]][1]
+sample.names <- unname(sapply(cutFs, get.sample.name))
+```
+
+### Quality Control
+
+```{r}
+# Visualize quality profiles
+plotQualityProfile(cutFs[1:2])
+plotQualityProfile(cutRs[1:2])
+```
+
+## Filtering
+
+```{r}
+# Filter reads
+filtFs <- file.path(path.cut, "filtered", basename(cutFs))
+filtRs <- file.path(path.cut, "filtered", basename(cutRs))
+
+out <- filterAndTrim(cutFs, filtFs, cutRs, filtRs, truncLen=c(260,200),
+                     maxN=0, maxEE=c(2,2), truncQ=2, rm.phix=TRUE,
+                     compress=TRUE, multithread=TRUE) 
+```
+
+## Error Modeling
+
+```{r}
+errF <- learnErrors(filtFs, multithread = TRUE)
+errR <- learnErrors(filtRs, multithread = TRUE)
+```
+
+## Dereplication and Merging of Paired Reads
+
+```{r}
+dadaFs <- dada(filtFs, err = errF, multithread = TRUE)
+dadaRs <- dada(filtRs, err = errR, multithread = TRUE)
+mergers <- mergePairs(dadaFs, filtFs, dadaRs, filtRs, verbose=TRUE, minOverlap = 12)
+seqtab <- makeSequenceTable(mergers)
+```
+
+## Chimera Removal and Statistical Summary
+
+```{r}
+seqtab.nochim <- removeBimeraDenovo(seqtab, method="consensus", multithread=TRUE, verbose=TRUE)
+table(nchar(getSequences(seqtab.nochim)))
+getN <- function(x) sum(getUniques(x))
+track <- cbind(out, sapply(dadaFs, getN), sapply(dadaRs, getN), sapply(mergers, getN),
+               rowSums(seqtab.nochim))
+colnames(track) <- c("input", "filtered", "denoisedF", "denoisedR", "merged", "nonchim")
+rownames(track) <- sample.names
+```
+
+## Taxonomic Assignment
+
+```{r}
+# Download and prepare the taxonomy data
+download.file("http://ftp.microbio.me/greengenes_release/current/2022.10.backbone.full-length.fna.qza", 
+              "2022.10.backbone.full-length.fna.qza")
+download.file("http://ftp.microbio.me/greengenes_release/current/2022.10.backbone.tax.qza",
+              "2022.10.backbone.tax.qza")
+unzip("2022.10.backbone.full-length.fna.qza")
+unzip("2022.10.backbone.tax.qza")
+fn <- "a53d9300-5c5c-4774-a2e8-a5e23904f1ae/data/dna-sequences.fasta"
+txfn <- "c16a953c-f24d-4d14-927c-40d90ced395e/data/taxonomy.tsv"
+
+sq <- getSequences(fn)
+tdf <- read.csv(txfn, sep="\t", header=TRUE)
+tax <- tdf[,2]
+names(tax) <- tdf[,1]
+
+# Assign taxonomy
+classifier <- "greengenes2_trainset.fa.gz"
+taxa <- assignTaxonomy(seqtab.nochim, classifier, multithread = TRUE, tryRC = TRUE)
+```
+
+## Results
+
+```{r}
+# Print and visualize results
+taxa_print <- taxa
+rownames(taxa_print) <- NULL
+head(taxa_print)
+```
+
+## Save Outputs
+
+```{r}
+# Save all objects and results to disk
+save(errF, dadaFs, dadaRs, seqtab.nochim, taxa, file = "data_ok.RData")
+write.csv(taxa, "taxonomy.csv")
+write.csv(seqtab.nochim, "table.csv")
+write.csv(track, "stats.csv")
+```

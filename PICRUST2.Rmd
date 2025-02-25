@@ -4,6 +4,26 @@ author: "Mirna Vazquez Rosas Landa"
 date: "2025-01-24"
 output: html_document
 ---
+## PICRUSt2 Analysis
+
+PICRUSt2 is utilized here for predictive functional profiling of metagenomic data. This section will activate the PICRUSt2 environment, run the analysis, and then add descriptions to the predicted functional traits.
+
+```{bash, eval=FALSE}
+# Activate the PICRUSt2 environment
+conda activate picrust2
+
+# Run the PICRUSt2 pipeline
+picrust2_pipeline.py -s seqs.fasta -i table.biom -o picrust2_manglar_new_final -p 3 --in_traits COG,EC,KO,PFAM,TIGRFAM --verbose
+
+# Move to the output directory
+cd picrust2_manglar_new_final/
+
+# Add descriptions to the output files
+add_descriptions.py -i EC_metagenome_out/pred_metagenome_unstrat.tsv.gz  -m EC  -o EC_metagenome_out/pred_metagenome_unstrat_descrip.tsv.gz
+add_descriptions.py -i KO_metagenome_out/pred_metagenome_unstrat.tsv.gz  -m KO  -o KO_metagenome_out/pred_metagenome_unstrat_descrip.tsv.gz
+add_descriptions.py -i COG_metagenome_out/pred_metagenome_unstrat.tsv.gz -m COG -o COG_metagenome_out/pred_metagenome_unstrat_descrip.tsv.gz
+add_descriptions.py -i pathways_out/path_abun_unstrat.tsv.gz -m METACYC -o pathways_out/path_abun_unstrat_descrip.tsv.gz
+```
 
 ```{python}
 conda activate picrust2
